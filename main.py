@@ -1,55 +1,95 @@
-import gzip
+import gradio as gr
 import numpy as np
+from PIL import Image
 
 from neural_network import NeuralNetwork
 
-training_set_images = "train-images-idx3-ubyte.gz"
-training_set_labels = "train-labels-idx1-ubyte.gz"
-test_set_images = "t10k-images-idx3-ubyte.gz"
-test_set_labels = "t10k-labels-idx1-ubyte.gz"
+
+def grayscale(arr):
+    height, width = arr.shape[0:2]
+    grayscaled = np.empty((height, width), dtype=np.uint8)
+    for y in range(height):
+        for x in range(width):
+            grayscaled[y][x] = arr[y][x][3]
+    return grayscaled
 
 
-def read_images_file(filename):
-    with gzip.open(filename, "rb") as f:
-        magic_number = int.from_bytes(f.read(4))
-        assert magic_number == 2051, "magic_number should be 2051"
-        number_of_images = int.from_bytes(f.read(4))
-        number_of_rows = int.from_bytes(f.read(4))
-        number_of_columns = int.from_bytes(f.read(4))
-        return [
-            np.reshape(
-                np.frombuffer(
-                    f.read(number_of_rows * number_of_columns), dtype=np.uint8
-                ).astype(np.float64)
-                / 255,
-                (number_of_rows * number_of_columns, 1),
-            )
-            for _ in range(number_of_images)
-        ]
+def minimum_bounding_box(arr):
+    height, width = arr.shape
+    left = width
+    top = height
+    right = 0
+    bottom = 0
+    for y in range(height):
+        for x in range(width):
+            if arr[y][x] == 0:
+                continue
+            if x < left:
+                left = x
+            if x > right:
+                right = x
+            if y < top:
+                top = y
+            if y > bottom:
+                bottom = y
+    return (left, top, right, bottom)
 
 
-def label_to_one_hot(i):
-    one_hot = np.zeros((10, 1))
-    one_hot[i] = 1
-    return one_hot
+def trim(image, box):
+    return image.crop(box)
 
 
-def read_labels_file(filename):
-    with gzip.open(filename, "rb") as f:
-        magic_number = int.from_bytes(f.read(4))
-        assert magic_number == 2049, "magic_number should be 2049"
-        number_of_items = int.from_bytes(f.read(4))
-        return np.frombuffer(f.read(number_of_items), dtype=np.uint8)
+def normalize(image, size):
+    width, height = image.size
+    max_width, max_height = size
+    scale = min(max_width / width, max_height / height)
+    return image.resize((int(width * scale), int(height * scale)))
 
 
-training_images = read_images_file(training_set_images)
-training_labels = read_labels_file(training_set_labels)
-test_images = read_images_file(test_set_images)
-test_labels = read_labels_file(test_set_labels)
-neural_network = NeuralNetwork([training_images[0].size, 16, 16, 10])
-training_data = [
-    (image, label_to_one_hot(label))
-    for image, label in zip(training_images, training_labels)
-]
-test_data = list(zip(test_images, test_labels))
-neural_network.train(training_data, 10, 100, 0.25, test_data)
+def center_of_mass(arr):
+    height, width = arr.shape
+    R = np.zeros(2)
+    for y in range(height):
+        for x in range(width):
+            m = arr[y][x]
+            r = np.array([x, y])
+            R += m * r
+    R /= np.sum(arr)
+    return R
+
+
+def center(image, size):
+    new_width, new_height = size
+    center_of_new_image = np.array([new_width / 2, new_height / 2])
+    R = center_of_mass(np.array(image))
+    offset = center_of_new_image - R
+    new_image = Image.new("L", size)
+    new_image.paste(image, tuple(offset.astype(int)))
+    return new_image
+
+
+def predict(im):
+    # The original black and white (bilevel) images from NIST were size normalized to fit in a 20x20 pixel box while preserving their aspect ratio. The resulting images contain grey levels as a result of the anti-aliasing technique used by the normalization algorithm. the images were centered in a 28x28 image by computing the center of mass of the pixels, and translating the image so as to position this point at the center of the 28x28 field.
+    grayscaled = grayscale(im["composite"])
+    bbox = minimum_bounding_box(grayscaled)
+    trimmed = trim(Image.fromarray(grayscaled), bbox)
+    normalized = normalize(trimmed, (20, 20))
+    centered = np.array(center(normalized, (28, 28)))
+
+    input = np.empty((28 * 28, 1))
+    for y in range(28):
+        for x in range(28):
+            input[y * 28 + x] = [centered[y][x] / 255]
+    output = neural_network.feedforward(input)
+    return int(np.argmax(output))
+
+
+if __name__ == "__main__":
+    neural_network = NeuralNetwork.deserialize("model.json")
+
+    demo = gr.Interface(
+        fn=predict,
+        inputs=[gr.ImageEditor(sources=(), transforms=(), layers=False)],
+        outputs=["label"],
+    )
+    demo.launch()
