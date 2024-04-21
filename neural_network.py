@@ -1,5 +1,6 @@
 import random
 import numpy as np
+import json
 
 
 class NeuralNetwork:
@@ -87,6 +88,27 @@ class NeuralNetwork:
             else:
                 print("Epoch {} complete".format(i))
         return
+
+    def serialize(self, path):
+        weights = [weight.tolist() for weight in self.weights]
+        biases = [bias.tolist() for bias in self.biases]
+        data = {"weights": weights, "biases": biases}
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+    def deserialize(path):
+        with open(path, "r") as f:
+            data = json.load(f)
+        weights = data["weights"]
+        biases = data["biases"]
+        neurons_per_layer = [
+            len(weights[0][0]),
+            *[len(weight) for weight in weights],
+        ]
+        neural_network = NeuralNetwork(neurons_per_layer)
+        neural_network.weights = [np.array(weight) for weight in weights]
+        neural_network.biases = [np.array(bias) for bias in biases]
+        return neural_network
 
 
 def sigmoid(x):
