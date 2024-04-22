@@ -89,7 +89,7 @@ if __name__ == "__main__":
 
     demo = gr.Interface(
         fn=predict,
-        inputs=[gr.ImageEditor(sources=(), transforms=(), layers=False)],
+        inputs=[gr.ImageEditor(sources=(), crop_size=(100, 100), transforms=(), layers=False)],
         outputs=["label"],
     )
     demo.launch()
